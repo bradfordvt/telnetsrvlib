@@ -1,7 +1,11 @@
 import logging
 #from binascii import hexlify
 from threading import Thread
-from SocketServer import BaseRequestHandler
+import sys
+if sys.version_info >= (3, 0):
+    from socketserver import BaseRequestHandler
+else:
+    from SocketServer import BaseRequestHandler
 
 from paramiko import Transport, ServerInterface, RSAKey, DSSKey, SSHException, \
                     AUTH_SUCCESSFUL, AUTH_FAILED, \
@@ -83,14 +87,23 @@ class SSHHandler(ServerInterface, BaseRequestHandler):
             if self.host_key is None:
                 log.critical('Host key not set!  SSHHandler MUST define the host_key parameter.')
                 raise NotImplementedError('Host key not set!  SSHHandler instance must define the host_key parameter.  Try host_key = paramiko_ssh.getRsaKeyFile("server_rsa.key").')
-        
-        try:
-            # Tell transport to use this object as a server
-            log.debug( 'Starting SSH server-side negotiation' )
-            self.transport.start_server(server=self)
-        except SSHException, e:
-           log.warn('SSH negotiation failed. %s', e)
-           raise
+
+        if sys.version_info >= (3, 0):
+            try:
+                # Tell transport to use this object as a server
+                log.debug('Starting SSH server-side negotiation')
+                self.transport.start_server(server=self)
+            except SSHException as e:
+                log.warning('SSH negotiation failed. %s', e)
+                raise
+        else:
+            try:
+                # Tell transport to use this object as a server
+                log.debug( 'Starting SSH server-side negotiation' )
+                self.transport.start_server(server=self)
+            except SSHException, e:
+               log.warn('SSH negotiation failed. %s', e)
+               raise
         
         # Accept any requested channels
         while True:

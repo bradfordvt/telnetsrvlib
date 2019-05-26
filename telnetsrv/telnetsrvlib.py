@@ -21,11 +21,16 @@ Various settings can affect the operation of the server:
                    Function.__doc__ should be long help
                    Function.aliases may be a list of alternative spellings
 """
+import sys
+if sys.version_info >= (3, 0):
+    import socketserver
+    from socketserver import BaseRequestHandler
+else:
+    import SocketServer
+    from SocketServer import BaseRequestHandler
 
-import SocketServer
 import socket
 import struct
-import sys
 import traceback
 import curses.ascii
 import curses.has_key
@@ -367,7 +372,7 @@ class InputBashLike(object):
             self.process( self.handler.readline(prompt=self.handler.CONTINUE_PROMPT) )
 
 
-class TelnetHandlerBase(SocketServer.BaseRequestHandler):
+class TelnetHandlerBase(BaseRequestHandler):
     "A telnet server based on the client in telnetlib"
     
     # Several methods are not fully defined in this class, and are
@@ -481,7 +486,7 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
             for alias in getattr(method, "aliases", []):
                 self.COMMANDS[alias.upper()] = self.COMMANDS[name]
                     
-        SocketServer.BaseRequestHandler.__init__(self, request, client_address, server)
+        BaseRequestHandler.__init__(self, request, client_address, server)
     
     class false_request(object):
         def __init__(self):
@@ -524,7 +529,10 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
         except:
             pass
         self.setterm(self.TERM)
-        self.sock = self.request._sock
+        if sys.version_info >= (3, 0):
+            self.sock = self.request
+        else:
+            self.sock = self.request._sock
         for k in self.DOACK.keys():
             self.sendcommand(self.DOACK[k], k)
         for k in self.WILLACK.keys():
@@ -552,17 +560,29 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
         if cmd == NOP:
             self.sendcommand(NOP)
         elif cmd == WILL or cmd == WONT:
-            if self.WILLACK.has_key(opt):
-                self.sendcommand(self.WILLACK[opt], opt)
+            if sys.version_info >= (3, 0):
+                if opt in self.WILLACK:
+                    self.sendcommand(self.WILLACK[opt], opt)
+                else:
+                    self.sendcommand(DONT, opt)
             else:
-                self.sendcommand(DONT, opt)
+                if self.WILLACK.has_key(opt):
+                    self.sendcommand(self.WILLACK[opt], opt)
+                else:
+                    self.sendcommand(DONT, opt)
             if cmd == WILL and opt == TTYPE:
                 self.writecooked(IAC + SB + TTYPE + SEND + IAC + SE)
         elif cmd == DO or cmd == DONT:
-            if self.DOACK.has_key(opt):
-                self.sendcommand(self.DOACK[opt], opt)
+            if sys.version_info >= (3, 0):
+                if opt in self.DOACK:
+                    self.sendcommand(self.DOACK[opt], opt)
+                else:
+                    self.sendcommand(WONT, opt)
             else:
-                self.sendcommand(WONT, opt)
+                if self.DOACK.has_key(opt):
+                    self.sendcommand(self.DOACK[opt], opt)
+                else:
+                    self.sendcommand(WONT, opt)
             if opt == ECHO:
                 self.DOECHO = (cmd == DO)
         elif cmd == SE:
@@ -582,15 +602,23 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
     def sendcommand(self, cmd, opt=None):
         "Send a telnet command (IAC)"
         if cmd in [DO, DONT]:
-            if not self.DOOPTS.has_key(opt):
-                self.DOOPTS[opt] = None
+            if sys.version_info >= (3, 0):
+                if not opt in self.DOOPTS:
+                    self.DOOPTS[opt] = None
+            else:
+                if not self.DOOPTS.has_key(opt):
+                    self.DOOPTS[opt] = None
             if (((cmd == DO) and (self.DOOPTS[opt] != True))
             or ((cmd == DONT) and (self.DOOPTS[opt] != False))):
                 self.DOOPTS[opt] = (cmd == DO)
                 self.writecooked(IAC + cmd + opt)
         elif cmd in [WILL, WONT]:
-            if not self.WILLOPTS.has_key(opt):
-                self.WILLOPTS[opt] = ''
+            if sys.version_info >= (3, 0):
+                if not opt in self.WILLOPTS:
+                    self.WILLOPTS[opt] = ''
+            else:
+                if not self.WILLOPTS.has_key(opt):
+                    self.WILLOPTS[opt] = ''
             if (((cmd == WILL) and (self.WILLOPTS[opt] != True))
             or ((cmd == WONT) and (self.WILLOPTS[opt] != False))):
                 self.WILLOPTS[opt] = (cmd == WILL)
@@ -796,14 +824,29 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
 
     def write(self, text):
         """Send a packet to the socket. This function cooks output."""
-        text = str(text)    # eliminate any unicode or other snigglets
-        text = text.replace(IAC, IAC+IAC)
-        text = text.replace(chr(10), chr(13)+chr(10))
+        if sys.version_info >= (3, 0):
+            if isinstance(text, bytes):
+                text = str(text, 'utf-8')
+            elif isinstance(text, bytearray):
+                text = text.encode('ISO-8859-1') # eliminate any unicode or other snigglets
+            text = text.replace(IAC, IAC+IAC)
+            text = text.replace('\n', '\r\n')
+
+        else:
+            text = str(text)    # eliminate any unicode or other snigglets
+            text = text.replace(IAC, IAC+IAC)
+            text = text.replace(chr(10), chr(13)+chr(10))
         self.writecooked(text)
 
     def writecooked(self, text):
         """Put data directly into the output queue (bypass output cooker)"""
-        self.sock.sendall(text)
+        if sys.version_info >= (3, 0):
+            if isinstance(text, str):
+                self.sock.sendall(text.encode('ISO-8859-1'))
+            else:
+                self.sock.sendall(text)
+        else:
+            self.sock.sendall(text)
 
 # ------------------------------- Input Cooker -----------------------------
     def _inputcooker_getc(self, block=True):
@@ -817,7 +860,11 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
         if not block:
             if not self.inputcooker_socket_ready():
                 return ''
-        ret = self.sock.recv(20)
+        r = self.sock.recv(20)
+        if sys.version_info >= (3, 0):
+            ret = r.decode('ISO-8859-1') # Because 3.6 socket returns bytearry, not str
+        else:
+            ret = r
         self.eof = not(ret)
         self.rawq = self.rawq + ret
         if self.eof:
@@ -926,27 +973,49 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
         """
         if params:
             cmd = params[0].upper()
-            if self.COMMANDS.has_key(cmd):
-                method = self.COMMANDS[cmd]
-                doc = method.__doc__.split("\n")
-                docp = doc[0].strip()
-                docl = '\n'.join( [l.strip() for l in doc[2:]] )
-                if not docl.strip():  # If there isn't anything here, use line 1
-                    docl = doc[1].strip()
-                self.writeline(
-                    "%s %s\n\n%s" % (
-                        cmd,
-                        docp,
-                        docl,
+            if sys.version_info >= (3, 0):
+                if cmd in self.COMMANDS:
+                    method = self.COMMANDS[cmd]
+                    doc = method.__doc__.split("\n")
+                    docp = doc[0].strip()
+                    docl = '\n'.join([l.strip() for l in doc[2:]])
+                    if not docl.strip():  # If there isn't anything here, use line 1
+                        docl = doc[1].strip()
+                    self.writeline(
+                        "%s %s\n\n%s" % (
+                            cmd,
+                            docp,
+                            docl,
+                        )
                     )
-                )
-                return
+                    return
+                else:
+                    self.writeline("Command '%s' not known" % cmd)
             else:
-                self.writeline("Command '%s' not known" % cmd)
+                if self.COMMANDS.has_key(cmd):
+                    method = self.COMMANDS[cmd]
+                    doc = method.__doc__.split("\n")
+                    docp = doc[0].strip()
+                    docl = '\n'.join( [l.strip() for l in doc[2:]] )
+                    if not docl.strip():  # If there isn't anything here, use line 1
+                        docl = doc[1].strip()
+                    self.writeline(
+                        "%s %s\n\n%s" % (
+                            cmd,
+                            docp,
+                            docl,
+                        )
+                    )
+                    return
+                else:
+                    self.writeline("Command '%s' not known" % cmd)
         else:
             self.writeline("Help on built in commands\n")
-        keys = self.COMMANDS.keys()
-        keys.sort()
+        if sys.version_info >= (3, 0):
+            keys = sorted(self.COMMANDS.keys())
+        else:
+            keys = self.COMMANDS.keys()
+            keys.sort()
         for cmd in keys:
             method = self.COMMANDS[cmd]
             if getattr(method, 'hidden', False):
@@ -1037,16 +1106,28 @@ class TelnetHandlerBase(SocketServer.BaseRequestHandler):
             if self.input.cmd:
                 cmd = self.input.cmd.upper()
                 params = self.input.params
-                if self.COMMANDS.has_key(cmd):
-                    try:
-                        self.COMMANDS[cmd](params)
-                    except:
-                        log.exception('Error calling %s.' % cmd)
-                        (t, p, tb) = sys.exc_info()
-                        if self.handleException(t, p, tb):
-                            break
+                if sys.version_info >= (3, 0):
+                    if cmd in self.COMMANDS:
+                        try:
+                            self.COMMANDS[cmd](params)
+                        except:
+                            log.exception('Error calling %s.' % cmd)
+                            (t, p, tb) = sys.exc_info()
+                            if self.handleException(t, p, tb):
+                                break
+                    else:
+                        self.writeerror("Unknown command '%s'" % cmd)
                 else:
-                    self.writeerror("Unknown command '%s'" % cmd)
+                    if self.COMMANDS.has_key(cmd):
+                        try:
+                            self.COMMANDS[cmd](params)
+                        except:
+                            log.exception('Error calling %s.' % cmd)
+                            (t, p, tb) = sys.exc_info()
+                            if self.handleException(t, p, tb):
+                                break
+                    else:
+                        self.writeerror("Unknown command '%s'" % cmd)
         log.debug("Exiting handler")
 
 
